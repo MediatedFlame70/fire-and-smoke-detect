@@ -1,0 +1,97 @@
+# Python caches and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments and local configuration
+.venv/
+venv/
+env/
+env.bak/
+venv.bak/
+.env
+.env.*
+!.env.example
+
+# Python packaging and build artifacts
+*.egg-info/
+.eggs/
+build/
+dist/
+develop-eggs/
+downloads/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg
+*.manifest
+*.spec
+
+# ML model weights and training outputs
+*.pth
+*.pt
+*.ckpt
+output/
+checkpoints/
+runs/
+tensorboard/
+logs/
+
+# Local datasets and generated predictions/evaluation results
+fire_smoke/
+Annotations/
+Datacluster Fire and Smoke Sample/
+test_images/
+test_predictions/
+test_results/
+predictions/
+results/
+evaluation_results/
+WEB/uploads/
+*.jpg
+*.jpeg
+*.png
+!cn2vf_net_architecture.png
+
+# Generated data and metrics
+data_split.json
+train_split.txt
+val_split.txt
+test_split.txt
+metrics_report/
+
+# Test and coverage caches
+.pytest_cache/
+.hypothesis/
+.tox/
+.cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+nosetests.xml
+*.cover
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating system and archives
+.DS_Store
+Thumbs.db
+*.log
+*.zip
+*.tar.gz
+*.rar

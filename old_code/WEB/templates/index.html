@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CN2VF-Net | Fire & Smoke Detection</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="app-background">
+        <div class="glow-orb orb-1"></div>
+        <div class="glow-orb orb-2"></div>
+    </div>
+
+    <div class="container">
+        <!-- Header -->
+        <header class="glass-panel main-header">
+            <div class="logo-area">
+                <div class="logo-icon">🔥</div>
+                <div class="logo-text">
+                    <h1>CN2VF-Net</h1>
+                    <p>AI Intelligence Layer</p>
+                </div>
+            </div>
+            <div class="status-indicator" id="statusBadge">
+                <div class="pulse-ring"></div>
+                <div class="status-dot"></div>
+                <span id="statusText">Initializing System...</span>
+            </div>
+        </header>
+
+        <!-- Main Grid -->
+        <div class="dashboard-grid">
+            
+            <!-- Left Column: Upload & Controls -->
+            <div class="left-panel">
+                <div class="glass-panel control-card">
+                    <h2 class="panel-title">Detection Node</h2>
+                    <p class="panel-desc">Upload drone imagery for real-time inference</p>
+                    
+                    <div class="upload-zone" id="uploadArea">
+                        <input type="file" id="fileInput" accept="image/*" hidden>
+                        <div class="upload-content" id="uploadPlaceholder">
+                            <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="17 8 12 3 7 8"></polyline>
+                                <line x1="12" y1="3" x2="12" y2="15"></line>
+                            </svg>
+                            <h3>Initialize Scan</h3>
+                            <p>Drag & drop or click to select image</p>
+                        </div>
+                    </div>
+
+                    <div class="threshold-control">
+                        <div class="slider-header">
+                            <label>Confidence Threshold</label>
+                            <span id="confidenceValue" class="value-badge">0.50</span>
+                        </div>
+                        <input type="range" id="confidenceSlider" min="0" max="1" step="0.01" value="0.5" class="modern-slider">
+                    </div>
+
+                    <button id="detectBtn" class="action-btn" disabled>
+                        <span class="btn-text">Execute Inference</span>
+                        <div class="btn-loader" style="display:none;"></div>
+                    </button>
+                </div>
+                
+                <!-- System Status Summary -->
+                <div class="glass-panel info-card">
+                    <h3 class="panel-title">System Metrics</h3>
+                    <div class="metrics-list">
+                        <div class="metric-row">
+                            <span class="metric-label">Compute Device</span>
+                            <span class="metric-val highlight-blue" id="deviceText">Scanning...</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">Model State</span>
+                            <span class="metric-val" id="modelStatusText">Loading...</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">Engine</span>
+                            <span class="metric-val">PyTorch + ViT</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Results & Visualization -->
+            <div class="right-panel">
+                <div class="glass-panel results-card" id="resultsSection">
+                    
+                    <!-- Pre-inference Placeholder -->
+                    <div class="results-empty" id="resultsEmpty">
+                        <div class="empty-icon">📡</div>
+                        <p>Awaiting visual input for analysis.</p>
+                    </div>
+
+                    <!-- Inference Active View -->
+                    <div class="results-content" id="resultsContent" style="display: none;">
+                        <div class="visualization-area">
+                            <div class="image-wrapper">
+                                <img id="resultImage" src="" alt="Analyzed frame">
+                                <canvas id="bboxCanvas"></canvas>
+                                <div class="scan-line" id="scanLine"></div>
+                            </div>
+                            
+                            <div class="detection-badge" id="detectionBadge">
+                                <span class="badge-icon" id="badgeIcon">✓</span>
+                                <span class="badge-text" id="predictedClass">Neutral</span>
+                                <span class="badge-conf" id="confidencePercent">99.9%</span>
+                            </div>
+                        </div>
+
+                        <div class="analysis-panel">
+                            <h3 class="panel-title">Probability Distribution</h3>
+                            
+                            <div class="prob-bars">
+                                <div class="prob-row">
+                                    <div class="prob-header">
+                                        <span class="prob-name">Fire</span>
+                                        <span class="prob-pct" id="fireProbValue">0%</span>
+                                    </div>
+                                    <div class="prob-track">
+                                        <div class="prob-fill fill-fire" id="fireProbBar"></div>
+                                    </div>
+                                </div>
+                                <div class="prob-row">
+                                    <div class="prob-header">
+                                        <span class="prob-name">Smoke</span>
+                                        <span class="prob-pct" id="smokeProbValue">0%</span>
+                                    </div>
+                                    <div class="prob-track">
+                                        <div class="prob-fill fill-smoke" id="smokeProbBar"></div>
+                                    </div>
+                                </div>
+                                <div class="prob-row">
+                                    <div class="prob-header">
+                                        <span class="prob-name">Neutral</span>
+                                        <span class="prob-pct" id="neutralProbValue">0%</span>
+                                    </div>
+                                    <div class="prob-track">
+                                        <div class="prob-fill fill-neutral" id="neutralProbBar"></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="bounding-box-stats">
+                                <h4>Spatial Coordinates</h4>
+                                <div class="coord-grid" id="bboxCoords">
+                                    <div class="coord-item"><span>X</span> <strong id="coordX">-</strong></div>
+                                    <div class="coord-item"><span>Y</span> <strong id="coordY">-</strong></div>
+                                    <div class="coord-item"><span>W</span> <strong id="coordW">-</strong></div>
+                                    <div class="coord-item"><span>H</span> <strong id="coordH">-</strong></div>
+                                </div>
+                            </div>
+
+                            <div class="alert-box" id="alertBox" style="display: none;">
+                                <div class="alert-icon">⚠️</div>
+                                <div class="alert-content">
+                                    <strong>Critical Alert</strong>
+                                    <p id="alertText">Anomaly detected in sector.</p>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
