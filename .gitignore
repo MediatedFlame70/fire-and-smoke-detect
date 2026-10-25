@@ -1,9 +1,19 @@
-# Python caches and compiled files
+# Python bytecode and caches
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
 
 # Virtual environments and local configuration
 .venv/
@@ -27,58 +37,44 @@ lib/
 lib64/
 parts/
 sdist/
-var/
 wheels/
 *.egg
 *.manifest
 *.spec
 
-# ML model weights and training outputs
-*.pth
+# Local datasets and dataset-generated files
+d-fire/
+fire_smoke/
+Annotations/
+data_split.json
+train_split.txt
+val_split.txt
+test_split.txt
+*.cache
+
+# Model weights, checkpoints, and experiment runs
 *.pt
+*.pth
 *.ckpt
-output/
+*.onnx
+*.h5
 checkpoints/
 runs/
 tensorboard/
+output/
 logs/
 
-# Local datasets and generated predictions/evaluation results
-fire_smoke/
-Annotations/
-Datacluster Fire and Smoke Sample/
+# Generated predictions, metrics, and evaluation artifacts
 test_images/
 test_predictions/
 test_results/
 predictions/
 results/
 evaluation_results/
-WEB/uploads/
-*.jpg
-*.jpeg
-*.png
-!cn2vf_net_architecture.png
-
-# Generated data and metrics
-data_split.json
-train_split.txt
-val_split.txt
-test_split.txt
 metrics_report/
+old_code/WEB/uploads/
 
-# Test and coverage caches
-.pytest_cache/
-.hypothesis/
-.tox/
-.cache/
-htmlcov/
-.coverage
-.coverage.*
-coverage.xml
-nosetests.xml
-*.cover
-
-# Jupyter
+# Jupyter and notebook artifacts
 .ipynb_checkpoints/
 
 # IDE and editor files
@@ -93,5 +89,6 @@ nosetests.xml
 Thumbs.db
 *.log
 *.zip
+*.tar
 *.tar.gz
 *.rar

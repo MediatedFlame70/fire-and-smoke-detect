@@ -3,6 +3,22 @@
 from PIL import Image
 
 
+def letterbox_bbox(bbox, width: int, height: int, size: int = 448):
+    """Map a normalized [cx, cy, w, h] box into the padded square canvas."""
+    scale = min(size / width, size / height)
+    resized_width = max(1, round(width * scale))
+    resized_height = max(1, round(height * scale))
+    left = (size - resized_width) // 2
+    top = (size - resized_height) // 2
+    cx, cy, box_width, box_height = (float(value) for value in bbox)
+    return [
+        (cx * resized_width + left) / size,
+        (cy * resized_height + top) / size,
+        box_width * resized_width / size,
+        box_height * resized_height / size,
+    ]
+
+
 def letterbox_image(image: Image.Image, bbox=None, size: int = 448, fill=(124, 116, 104)):
     """Resize without distorting aspect ratio and pad to a square.
 
@@ -22,13 +38,4 @@ def letterbox_image(image: Image.Image, bbox=None, size: int = 448, fill=(124, 1
     canvas.paste(resized, (left, top))
     if bbox is None:
         return canvas
-
-    cx, cy, box_width, box_height = (float(value) for value in bbox)
-    adjusted_bbox = [
-        (cx * resized_width + left) / size,
-        (cy * resized_height + top) / size,
-        box_width * resized_width / size,
-        box_height * resized_height / size,
-    ]
-    return canvas, adjusted_bbox
-
+    return canvas, letterbox_bbox(bbox, width, height, size)

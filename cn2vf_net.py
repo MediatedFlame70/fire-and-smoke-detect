@@ -109,6 +109,23 @@ class PatchEmbed(nn.Module):
         return x, h, w
 
 
+def interpolate_pos_encoding(pos_embed, target_h, target_w):
+    """Resize a learned square-grid positional embedding to a token-map size."""
+    token_count = pos_embed.shape[1]
+    base_size = math.isqrt(token_count)
+    if base_size * base_size != token_count:
+        raise ValueError(f"Expected a square positional grid, got {token_count} tokens.")
+    if (base_size, base_size) == (target_h, target_w):
+        return pos_embed
+
+    dim = pos_embed.shape[-1]
+    pos_2d = pos_embed.reshape(1, base_size, base_size, dim).permute(0, 3, 1, 2)
+    pos_2d = F.interpolate(
+        pos_2d, size=(target_h, target_w), mode="bicubic", align_corners=False
+    )
+    return pos_2d.permute(0, 2, 3, 1).flatten(1, 2)
+
+
 class MHSABlock(nn.Module):
     """
     Transformer block with MHSA + FFN + LayerNorm.
@@ -200,9 +217,17 @@ class MultiScaleFusion(nn.Module):
         self.c3_proj = ConvBNAct(c3_dim, fuse_dim, kernel_size=1)
         self.t2_proj = ConvBNAct(t2_dim, fuse_dim, kernel_size=1)
         self.t3_proj = ConvBNAct(t3_dim, fuse_dim, kernel_size=1)
+        fused_channels = fuse_dim * 4
+        self.gate = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(fused_channels, fused_channels // 4, kernel_size=1),
+            nn.GELU(),
+            nn.Conv2d(fused_channels // 4, fused_channels, kernel_size=1),
+            nn.Sigmoid(),
+        )
         self.fuse = nn.Sequential(
-            ConvBNAct(fuse_dim * 4, fuse_dim * 4, kernel_size=3, groups=fuse_dim * 4),
-            ConvBNAct(fuse_dim * 4, fuse_dim, kernel_size=1),
+            ConvBNAct(fused_channels, fused_channels, kernel_size=3, groups=fused_channels),
+            ConvBNAct(fused_channels, fuse_dim, kernel_size=1),
         )
 
     def forward(self, c2, c3, t2_map, t3_map):
@@ -211,13 +236,14 @@ class MultiScaleFusion(nn.Module):
         for projection, feature in ((self.c3_proj, c3), (self.t2_proj, t2_map), (self.t3_proj, t3_map)):
             projected = projection(feature)
             features.append(F.interpolate(projected, size=target_size, mode="bilinear", align_corners=False))
-        return self.fuse(torch.cat(features, dim=1))
+        concatenated = torch.cat(features, dim=1)
+        return self.fuse(concatenated * self.gate(concatenated))
 
 
 class SalientDetectionHead(nn.Module):
-    """Decoupled classification/box heads with GeM salient-feature pooling."""
+    """Four-way image classifier with separate fire and smoke box regressors."""
 
-    def __init__(self, in_dim=128, num_classes=3):
+    def __init__(self, in_dim=128, num_classes=4):
         super().__init__()
         self.stem = nn.Sequential(
             ConvBNAct(in_dim, in_dim, kernel_size=3, groups=in_dim),
@@ -228,20 +254,28 @@ class SalientDetectionHead(nn.Module):
             nn.Linear(in_dim, in_dim // 2), nn.GELU(), nn.Dropout(0.1),
             nn.Linear(in_dim // 2, num_classes),
         )
-        self.box_branch = nn.Sequential(
+        self.fire_box_branch = nn.Sequential(
+            nn.Linear(in_dim, in_dim // 2), nn.GELU(), nn.Dropout(0.1),
+            nn.Linear(in_dim // 2, 4), nn.Sigmoid(),
+        )
+        self.smoke_box_branch = nn.Sequential(
             nn.Linear(in_dim, in_dim // 2), nn.GELU(), nn.Dropout(0.1),
             nn.Linear(in_dim // 2, 4), nn.Sigmoid(),
         )
 
     def forward(self, x):
         features = self.gem_pool(self.stem(x)).flatten(1)
-        return self.cls_branch(features), self.box_branch(features)
+        return (
+            self.cls_branch(features),
+            self.fire_box_branch(features),
+            self.smoke_box_branch(features),
+        )
 
 
 class CN2VFNet(nn.Module):
-    """Four-stage CNN / three-stage transformer hybrid for fire-smoke images."""
+    """CNN/Transformer hybrid with Fire, Smoke, Both, None classes and two box heads."""
 
-    def __init__(self, num_classes=3):
+    def __init__(self, num_classes=4):
         super().__init__()
 
         # Stem: [B, 3, 448, 448] -> [B, 16, 224, 224]
@@ -302,24 +336,26 @@ class CN2VFNet(nn.Module):
         c4 = self.cnn_stage4(c3)
 
         t1, h1, w1 = self.patch_embed(c4)
-        if t1.shape[1] != self.pos_embed1.shape[1]:
-            raise ValueError("CN2VF-Net positional embeddings currently require 448x448 input images.")
-        t1 = self.vit_stage1(t1 + self.pos_embed1)
+        pos1 = interpolate_pos_encoding(self.pos_embed1, h1, w1)
+        t1 = self.vit_stage1(t1 + pos1)
         t2, h2, w2 = self.token_down1(t1, h1, w1)
-        t2 = self.vit_stage2(t2 + self.pos_embed2)
-        t3 = self.vit_stage3(self.token_down2(t2) + self.pos_embed3)
+        pos2 = interpolate_pos_encoding(self.pos_embed2, h2, w2)
+        t2 = self.vit_stage2(t2 + pos2)
+        pos3 = interpolate_pos_encoding(self.pos_embed3, h2, w2)
+        t3 = self.vit_stage3(self.token_down2(t2) + pos3)
 
         batch_size = x.shape[0]
         t2_map = t2.transpose(1, 2).reshape(batch_size, 192, h2, w2)
         t3_map = t3.transpose(1, 2).reshape(batch_size, 256, h2, w2)
         fused = self.fusion(c2, c3, t2_map, t3_map)
 
-        cls_logits, bbox = self.head(fused)
-        # cls_logits: [B, 3], bbox: [B, 4]
+        cls_logits, fire_bbox, smoke_bbox = self.head(fused)
+        # cls_logits: [B, 4], each class-specific bbox: [B, 4] as cx, cy, w, h
 
         return {
             "cls_logits": cls_logits,
-            "bbox": bbox,
+            "fire_bbox": fire_bbox,
+            "smoke_bbox": smoke_bbox,
         }
 
 
@@ -375,11 +411,12 @@ def ciou_loss(pred_boxes, target_boxes, eps=1e-7):
 
 if __name__ == "__main__":
     # Quick shape sanity check
-    model = CN2VFNet(num_classes=3)
+    model = CN2VFNet(num_classes=4)
     model.eval()
 
     with torch.no_grad():
         dummy = torch.randn(2, 3, 448, 448)
         out = model(dummy)
         print("cls_logits shape:", out["cls_logits"].shape)  # [2, 3]
-        print("bbox shape:", out["bbox"].shape)  # [2, 4]
+        print("fire bbox shape:", out["fire_bbox"].shape)  # [2, 4]
+        print("smoke bbox shape:", out["smoke_bbox"].shape)  # [2, 4]

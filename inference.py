@@ -15,8 +15,8 @@ from preprocessing import letterbox_image
 class FireSmokePredictor:
     """Predictor for fire and smoke detection."""
     
-    CLASS_NAMES = ["Fire", "Smoke", "Neutral"]
-    CLASS_COLORS = [(255, 0, 0), (169, 169, 169), (0, 255, 0)]  # Red, Gray, Green
+    CLASS_NAMES = ["Fire only", "Smoke only", "Fire + Smoke", "None"]
+    CLASS_COLORS = [(255, 0, 0), (169, 169, 169), (255, 128, 0), (0, 255, 0)]
     
     def __init__(self, checkpoint_path, device="cuda"):
         """
@@ -28,8 +28,11 @@ class FireSmokePredictor:
         print(f"Using device: {self.device}")
         
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        if not isinstance(checkpoint, dict) or checkpoint.get("model_type") != "cn2vf_dualbox_v2":
+            raise ValueError("This predictor requires a four-class dual-box CN2VF checkpoint.")
         self.preprocessing_type = checkpoint.get("preprocessing", "stretch") if isinstance(checkpoint, dict) else "stretch"
-        self.model = CN2VFNet(num_classes=3)
+        self.img_size = int(checkpoint.get("img_size", 448))
+        self.model = CN2VFNet(num_classes=4)
         
         if "model_state_dict" in checkpoint:
             self.model.load_state_dict(checkpoint["model_state_dict"])
@@ -43,7 +46,7 @@ class FireSmokePredictor:
         
         # Image preprocessing
         self.transforms = T.Compose([
-            *([T.Resize((448, 448))] if self.preprocessing_type == "stretch" else []),
+            *([T.Resize((self.img_size, self.img_size))] if self.preprocessing_type == "stretch" else []),
             T.ToTensor(),
             T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
@@ -71,7 +74,7 @@ class FireSmokePredictor:
         image = Image.open(image_path).convert("RGB")
         orig_w, orig_h = image.size
         
-        prepared_image = letterbox_image(image, size=448) if self.preprocessing_type == "letterbox-v1" else image
+        prepared_image = letterbox_image(image, size=self.img_size) if self.preprocessing_type == "letterbox-v1" else image
         image_tensor = self.transforms(prepared_image).unsqueeze(0).to(self.device)
         
         # Inference
@@ -81,37 +84,46 @@ class FireSmokePredictor:
         class_probs = torch.softmax(output["cls_logits"], dim=1)
         predicted_class_idx = torch.argmax(class_probs, dim=1).item()
         confidence = class_probs[0, predicted_class_idx].item()
-        bbox_norm = output["bbox"][0].cpu().numpy()
+        fire_bbox = output["fire_bbox"][0].cpu().tolist()
+        smoke_bbox = output["smoke_bbox"][0].cpu().tolist()
 
-        # The model predicts boxes in the padded square canvas. Convert them
-        # back to the original image's normalized coordinates for callers and
-        # visualization; legacy stretch-trained checkpoints need no mapping.
+        # Convert each predicted padded-canvas box to original-image coordinates.
         if self.preprocessing_type == "letterbox-v1":
-            scale = min(448 / orig_w, 448 / orig_h)
+            scale = min(self.img_size / orig_w, self.img_size / orig_h)
             resized_w = max(1, round(orig_w * scale))
             resized_h = max(1, round(orig_h * scale))
-            left = (448 - resized_w) // 2
-            top = (448 - resized_h) // 2
-            cx, cy, box_w, box_h = (float(value) for value in bbox_norm)
-            x1 = max(0.0, min(float(orig_w), ((cx - box_w / 2) * 448 - left) * orig_w / resized_w))
-            y1 = max(0.0, min(float(orig_h), ((cy - box_h / 2) * 448 - top) * orig_h / resized_h))
-            x2 = max(0.0, min(float(orig_w), ((cx + box_w / 2) * 448 - left) * orig_w / resized_w))
-            y2 = max(0.0, min(float(orig_h), ((cy + box_h / 2) * 448 - top) * orig_h / resized_h))
-            bbox_norm = [
-                (x1 + x2) / (2 * orig_w),
-                (y1 + y2) / (2 * orig_h),
-                (x2 - x1) / orig_w,
-                (y2 - y1) / orig_h,
-            ]
+            left = (self.img_size - resized_w) // 2
+            top = (self.img_size - resized_h) // 2
+
+            def unletterbox(box):
+                cx, cy, box_w, box_h = (float(value) for value in box)
+                x1 = max(0.0, min(float(orig_w), ((cx - box_w / 2) * self.img_size - left) * orig_w / resized_w))
+                y1 = max(0.0, min(float(orig_h), ((cy - box_h / 2) * self.img_size - top) * orig_h / resized_h))
+                x2 = max(0.0, min(float(orig_w), ((cx + box_w / 2) * self.img_size - left) * orig_w / resized_w))
+                y2 = max(0.0, min(float(orig_h), ((cy + box_h / 2) * self.img_size - top) * orig_h / resized_h))
+                return [(x1 + x2) / (2 * orig_w), (y1 + y2) / (2 * orig_h),
+                        (x2 - x1) / orig_w, (y2 - y1) / orig_h]
+
+            fire_bbox = unletterbox(fire_bbox)
+            smoke_bbox = unletterbox(smoke_bbox)
         
         class_name = self.CLASS_NAMES[predicted_class_idx]
-        is_detection = (predicted_class_idx in [0, 1]) and (confidence >= confidence_threshold)
+        fire_confidence = float((class_probs[0, 0] + class_probs[0, 2]).item())
+        smoke_confidence = float((class_probs[0, 1] + class_probs[0, 2]).item())
+        fire_detected = fire_confidence >= confidence_threshold
+        smoke_detected = smoke_confidence >= confidence_threshold
+        is_detection = fire_detected or smoke_detected
         
         return {
             "class": class_name,
             "class_idx": predicted_class_idx,
             "confidence": confidence,
-            "bbox": bbox_norm.tolist() if hasattr(bbox_norm, "tolist") else bbox_norm,
+            "fire_confidence": fire_confidence,
+            "smoke_confidence": smoke_confidence,
+            "fire_bbox": fire_bbox,
+            "smoke_bbox": smoke_bbox,
+            "fire_detected": fire_detected,
+            "smoke_detected": smoke_detected,
             "is_detection": is_detection,
             "image_size": (orig_w, orig_h),
         }
@@ -136,44 +148,37 @@ class FireSmokePredictor:
         draw = ImageDraw.Draw(image)
         
         orig_w, orig_h = result["image_size"]
-        class_idx = result["class_idx"]
-        color = self.CLASS_COLORS[class_idx]
-        
-        # Draw bounding box if detection
-        if result["is_detection"]:
-            x, y, w, h = result["bbox"]
-            
-            # Convert normalized coords to absolute
-            x1 = int((x - w/2) * orig_w)
-            y1 = int((y - h/2) * orig_h)
-            x2 = int((x + w/2) * orig_w)
-            y2 = int((y + h/2) * orig_h)
-            
-            # Draw rectangle
-            draw.rectangle([x1, y1, x2, y2], outline=color, width=4)
-            
-            # Draw label
-            label = f"{result['class']}: {result['confidence']*100:.1f}%"
-            
-            # Try to use a font, fall back to default if not available
+        detections = []
+        if result["fire_detected"]:
+            detections.append(("Fire", result["fire_confidence"], result["fire_bbox"], self.CLASS_COLORS[0]))
+        if result["smoke_detected"]:
+            detections.append(("Smoke", result["smoke_confidence"], result["smoke_bbox"], self.CLASS_COLORS[1]))
+
+        if detections:
             try:
                 font = ImageFont.truetype("arial.ttf", 20)
-            except:
+            except OSError:
                 font = ImageFont.load_default()
-            
-            # Draw text background
-            bbox_text = draw.textbbox((x1, y1 - 25), label, font=font)
-            draw.rectangle(bbox_text, fill=color)
-            draw.text((x1, y1 - 25), label, fill=(255, 255, 255), font=font)
+
+            for label_name, confidence, box, color in detections:
+                x, y, w, h = box
+                # Convert normalized coords to absolute.
+                x1 = int((x - w/2) * orig_w)
+                y1 = int((y - h/2) * orig_h)
+                x2 = int((x + w/2) * orig_w)
+                y2 = int((y + h/2) * orig_h)
+                draw.rectangle([x1, y1, x2, y2], outline=color, width=4)
+                label = f"{label_name}: {confidence*100:.1f}%"
+                bbox_text = draw.textbbox((x1, y1 - 25), label, font=font)
+                draw.rectangle(bbox_text, fill=color)
+                draw.text((x1, y1 - 25), label, fill=(255, 255, 255), font=font)
         else:
-            # Just show class label at top
             label = f"{result['class']}: {result['confidence']*100:.1f}%"
             try:
                 font = ImageFont.truetype("arial.ttf", 24)
-            except:
+            except OSError:
                 font = ImageFont.load_default()
-            
-            draw.text((10, 10), label, fill=color, font=font)
+            draw.text((10, 10), label, fill=self.CLASS_COLORS[result["class_idx"]], font=font)
         
         # Save if output path provided
         if output_path:
@@ -231,10 +236,14 @@ def main():
         # Print results
         print(f"  Class:      {result['class']}")
         print(f"  Confidence: {result['confidence']*100:.2f}%")
-        print(f"  BBox:       {result['bbox']}")
+        print(f"  Fire score: {result['fire_confidence']*100:.2f}%  box={result['fire_bbox']}")
+        print(f"  Smoke score:{result['smoke_confidence']*100:.2f}%  box={result['smoke_bbox']}")
         
         if result["is_detection"]:
-            print(f"  ⚠️  ALERT: {result['class']} detected!")
+            labels = ", ".join(name for name, detected in (
+                ("Fire", result["fire_detected"]), ("Smoke", result["smoke_detected"])
+            ) if detected)
+            print(f"  ALERT: {labels} detected!")
             detections_count += 1
         
         # Visualize if requested
